@@ -432,11 +432,11 @@ EXACT-MATCH is non-nil, substrings may also can be cnadidates."
                    (git-complete-fallback-function
                     (funcall git-complete-fallback-function))
                    (t
-                    (message "No completions found.")))))
+                    (popup-tip " >> No completions found. ")))))
           (git-complete-fallback-function
            (funcall git-complete-fallback-function))
           (t
-           (message "No completions found.")))))
+           (popup-tip " >> No completions found. ")))))
 
 (defun git-complete ()
   "Complete the line at point with `git grep'."
