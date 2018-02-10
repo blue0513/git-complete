@@ -18,9 +18,10 @@ may want to insert.
   unlike other completion engines (rather like snippet engines)
 
 - be used as an "omni (smart) completion" engine, i.e. =git-complete=
-  tries to suggest expressions you may want to insert next, *even when
-  you don't remember it*, by grepping your project (class methods
-  after a class name, typical argument for a function, for examples)
+  tries to suggest expressions you may want to insert next, according
+  to the context, *even when you don't remember it*, by grepping your
+  project (class methods after a class name, typical argument for a
+  function, for examples)
 
 - be used with *no per-language configurations or dictionaries*,
   unlike snippet engines or omni-completion engines
@@ -76,9 +77,9 @@ and (optionally) bind some keys.
 
 (Consider "|" as the cursor in following examples)
 
-Open a file under a git repo, and =M-x git-complete=
+Open a file under a git repo, and =M-x git-complete=,
 
-- after a part of a package name (frequently used in your project)
+- after a part of a package name:
 
   #+begin_src perl
     SHA|
@@ -91,7 +92,7 @@ Open a file under a git repo, and =M-x git-complete=
     |
   #+end_src
 
-- after a constructor
+- after a constructor:
 
   #+begin_src javascript
     var foo = moment().|
@@ -110,7 +111,7 @@ Open a file under a git repo, and =M-x git-complete=
     var foo = moment().format("YYYY-MM-DD HH:mm:ss"|
   #+end_src
 
-- after a complete line
+- after a newline:
 
   #+begin_src perl
     use strict;
@@ -136,112 +137,214 @@ Open a file under a git repo, and =M-x git-complete=
 
 See "How it works" section for details:
 
-- =git-complete-omni-completion-threshold=
-- =git-complete-line-completion-threshold=
+- =git-complete-threshold=
+- =git-complete-whole-line-completion-threshold=
 - =git-complete-next-line-completion-threshold=
-- =git-complete-repeat-line-completion=
-- =git-complete-repeat-omni-completion=
+- =git-complete-repeat-completion=
 
 ** How it works
 
-There are (internally) three completion methods in git-complete.
+There are two methods to collect completions:
 
-- line completion
+- current-line completion
 - next-line completion
+
+and each completions are classified into two types:
+
+- whole-line completion
 - omni completion
 
-and chosen as follows:
+User is prompted to select one of the completions, and the selected
+completion is inserted to the buffer in different ways according to
+its type.
 
-- current line has no characters before the cursor ?
-  - yes -> try "next-line completion"
-  - no -> try "line completion"
-    - line completion failed -> try "omni completion"
+*** Completion collection
+**** Current-line completion
 
-Each completion methods works as follows:
+example condition:
 
-*** Line completion
+: React|            * consider | as the cursor
 
-before:
+1. Collect lines containing "React" in your git repo, by =git grep=
+   -ing with "React"
 
-: SHA|                   * consider "|" as the cursor
+   : $ git grep -F -h "React"
+   : import React from 'react';
+   : export default class extends React.Component {
+   : export default class extends React.Component {
+   : import React from 'react';
+   : export default class extends React.Component {
+   : import React from 'react';
+   : import ReactDOM from 'react-dom';
+   : export default class extends React.Component {
+   :     ReactDOM.render(<MyComponent />);
+   : import React from 'react';
+   : export default class extends React.Component {
+   : import ReactDOM from 'react-dom';
+   :     ReactDOM.render(<AnotherComponent />);
+   : ...
 
-after:
+2. If some lines found in 1. appear "commonly" (as defined by
+   =git-complete-whole-line-completion-threshold=), they are added to
+   the completions list, as "whole-line" completions.
 
-: use Digest::SHA;
-: |
+   : |                                                 | frequency | type       |
+   : +-------------------------------------------------+-----------+------------|
+   : | export default class extends React.Component{\n |       60% | whole-line |
+   : | import React from 'react';\n                    |       30% | whole-line |
+   : | ...                                             |       ... |        ... |
 
-1. Collect lines containing "SHA" in your git repo, by git grepping
-   with "SHA"
+3. Trim each lines found in 1. as follows:
 
-2. Find the lines frequently appears in your repo (>=2% by default:
-   see =git-complete-line-completion-threshold=) and suggest them
+   - Find the query string ("React" in this case) inside the line and
+     remove characters before the query and the query itself.
 
-   1. If 2. failed, try "omni completion"
+   - If the line has more close parens than open parens, remove
+     characters after the innermost matching close paren.
 
-   2. If 2. succeeded and =git-complete-repeat-line-completion= is
-      non-nil, try "next-line completion"
+   : from 'react';
+   : .Component {
+   : .Component {
+   : from 'react';
+   : .Component {
+   : from 'react';
+   : DOM from 'react-dom';
+   : .Component {
+   : DOM.render(<MyComponent />);
+   : from 'react';
+   : .Component {
+   : DOM from 'react-dom';
+   : DOM.render(<AnotherComponent />);
+   : ...
 
-*** Next-line completion
+4. Drop some words from the end of each lines until it gets "common"
+   enough (as defined in =git-complete-threshold=), and add to the
+   completions list as "omni" completions.
 
-before:
+   : |                                                  | frequency | type       |
+   : +--------------------------------------------------+-----------+------------|
+   : | export default class extends React.Component {\n |       60% | whole-line |
+   : | import React from 'react';\n                     |       30% | whole-line |
+   : | .Component {\n                                   |       60% |       omni |
+   : | from 'react';\n                                  |       30% |       omni |
+   : | DOM from 'react-dom';\n                          |        5% |       omni |
+   : | DOM.render(                                      |        5% |       omni |
+   : | ...                                              |       ... |        ... |
+
+   (argument to =ReactDOM.render= is dropped, since they does not
+   appear "commonly")
+
+   If some lines did not get "common" enough even if all the words are
+   dropped except for one, they are not added to the completions list.
+
+5. If no completions are found, shorten the query by one subword
+   (configurable via =git-cmopletion-omni-completion-type=) and =git
+   grep= again, then back to the step 3. .
+
+   example condition:
+
+   : var foo = bar(MyClass.|
+
+   The query "var foo = bar(MyClass." is too specific to find some
+   "common" lines, thus shortened to "foo = bar(MyClass.",
+   "bar(MyClass." then "MyClass." which may give some "common" method
+   names of the class "MyClass".
+
+   Note that this case does not give any "whole-line" completions,
+   since the step 2. is skipped.
+
+**** Next-line completion
+
+example condition:
 
 : use strict;
-: |
-
-after:
-
-: use strict;
-: use warnings;
 : |
 
 1. Collect lines next to "use strict;" in your git repo, by git
    grepping with "use strict;"
 
-2. Find the lines frequently appears in your repo (>=30% by default:
-   see =git-complete-next-line-completion-threshold=) and suggest them
+   : > git grep -F -h -A1 "use strict;"
+   : use strict;
+   : sub foo {
+   : --
+   : use strict;
+   : use warnings;
+   : --
+   : use strict;
+   : use warnings;
+   : --
+   : use strict;
+   : sub bar {
+   : --
+   : use strict;
+   : use utf8;
+   : --
+   : ...
 
-   1. If 2. succeeded and =git-complete-repeat-line-completion= is
-      non-nil, try "next-line" completion again
+2. Find "whole-line" matches as like the step 2. of "Current-line
+   completion", according to
+   =git-complete-next-line-completion-threshold=
 
-*** Omni completion
+   : |                         | frequency | type       |
+   : +-------------------------+-----------+------------|
+   : | use warnings;\n         |       80% | whole-line |
+   : | use utf8;\n             |       20% | whole-line |
+   : | ...                     |       ... |        ... |
 
-before:
+   Note that next-line completion does not give any "omni"
+   completions.
 
-: var foo = bar(MyClass.|)
+*** Completion insertion
+**** Whole-line completion
 
-after:
+example condition:
 
-: var foo = bar(MyClass.my_awesome_method|)
+: React|
 
-1. Collect lines which contains "var foo = bar(MyClass." in your git
-   repo, by git grepping with "var foo = bar(MyClass."
+and the selected completion is:
 
-2. Find the longest (described below) common substrings which
-   immediately follows "var foo = bar(MyClass." and frequently appears
-   in your git repo (>=0.5% by default: see
-   =git-complete-omni-completion-threshold=) and suggest them
+: export default class extends React.Component {
 
-   - "longest" :: if "format()" is found, for example, do not suggest
-                  "fo" as a completion candidate
+1. Delete all characters in the line
 
-   1. If no such substrings found, shorten the query by 1 symbol
+   : |
 
-      : "var foo = bar(MyClass." => "foo = bar(MyClass."
+2. Insert the completion with a newline and indentation
 
-      and if the shortened query still have at least 1 symbol, git
-      grep with the shortened query again (repeat this until all
-      symbols in the query are dropped). Otherwise completion fails.
+   : export default class extends React.Component {
+   :     |
 
-   2. If completion succeeded and
-      =git-complete-repeat-omni-completion= is non-nil, try "omni
-      completion" again
+3. Add some close parens as needed (See "autopair" section for details)
+
+   : export default class extends React.Component {
+   :     |
+   : }
+
+**** Omni completion
+
+example condition:
+
+: var foo = moment().format|
+
+and the selected completion is:
+
+: ("YYYY-MM-DD HH:mm:ss",
+
+1. Just insert the completion
+
+   : var foo = moment().format("YYYY-MM-DD HH:mm:ss",|
+
+2. Add some close parens as needed (See "autopair" section for
+   details) after the cursor
+
+   : var foo = moment().format("YYYY-MM-DD HH:mm:ss",|)
 
 ** "autopair" feature
 
 When =git-grep-enable-autopair= is non-nil, the parenthesis balance is
 always kept during completion.
 
-*** (Next-)line completion
+*** Whole-line (Next-line) completion
 
 - Open paren
 
@@ -301,7 +404,7 @@ always kept during completion.
   (I'm not sure this behavior is very useful ... but just to keep the
   balance. maybe improved in the future versions ... ?)
 
-*** Omni completion
+*** Otherwise
 
 - Open paren
 
@@ -315,7 +418,7 @@ always kept during completion.
   : ("YYYY-MM-DD HH:mm:ss",
 
   then close parens are inserted automatically (without an empty line,
-  unlike line completion).
+  unlike whole-line completion).
 
   : result:
   : var formatted = moment.format("YYYY-MM-DD HH:mm:ss",|)
