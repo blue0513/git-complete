@@ -412,7 +412,11 @@ EXACT-MATCH is non-nil, substrings may also can be cnadidates."
          (candidates (when (string-match "\\_>" query)
                        (git-complete--get-candidates query threshold (null omni-from) next-line-p))))
     (cond (candidates
-           (let ((completion (popup-menu* candidates :scroll-bar t
+           (let ((completion (popup-menu* candidates
+					  :scroll-bar t
+					  :width 60
+					  :margin-left 2
+					  :margin-right 2
                                           :isearch git-complete-enable-isearch
                                           :keymap git-complete--popup-menu-keymap)))
              (git-complete--replace-substring
